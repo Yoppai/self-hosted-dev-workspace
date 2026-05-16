@@ -1,0 +1,6 @@
+# Secrets — NEVER commit real credentials
+.env
+
+# SDD runtime artifacts — not source code
+.atl/
+sdd/
