@@ -1,0 +1,241 @@
+# docker-compose.yml
+# Self-Hosted Workspace MVP — All Services
+# ============================================
+# Deploys code-server, opencode-server, CodeNomad, and KasmVNC behind
+# Traefik HTTPS. KasmVNC provides a browser-accessible Linux desktop.
+#
+## Dokploy deployment
+#   This Compose file is designed for Dokploy's Compose service type.
+#   Set environment variables in Dokploy's env UI (see .env.example).
+#   Volumes marked `external: true` must exist before first deploy
+#   (run scripts/bootstrap.sh or `docker volume create`).
+#
+## Local testing
+#   cp .env.example .env
+#   docker compose build
+#   docker compose up -d
+#
+## Architecture notes
+#   - No service ports are published to the host interface.
+#     Traefik is the sole ingress point (via Dokploy network).
+#   - All services run as UID 1000 for shared-volume compatibility.
+#   - Health checks use `curl` (available in all images).
+#   - The `workspace-net` bridge provides internal DNS resolution.
+
+services:
+  # ── code-server: VS Code in the browser ─────────────────────────────────
+  # Official image, no custom build needed.
+  code-server:
+    image: codercom/code-server:4.97.2
+    container_name: workspace-code-server
+    restart: unless-stopped
+    networks:
+      - workspace-net
+    volumes:
+      # Shared project files — readable/writable by all services
+      - workspace_projects:/home/coder/projects
+      # Shared user profile — .gitconfig, .ssh, OAuth tokens
+      - workspace_profile:/home/coder/.config
+      # Private VS Code extensions and settings
+      - code_server_config:/home/coder/.local/share/code-server
+    environment:
+      - PASSWORD=${CODE_SERVER_PASSWORD:?err}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.code-server.rule=Host(`code.workspace.dev`)"
+      - "traefik.http.routers.code-server.entrypoints=websecure"
+      - "traefik.http.routers.code-server.tls=true"
+      - "traefik.http.routers.code-server.tls.certresolver=letsencrypt"
+      - "traefik.http.services.code-server.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── opencode-server: AI coding assistant CLI/server ─────────────────────
+  # Custom image built from dev-base with opencode globally installed.
+  opencode-server:
+    build:
+      context: ./opencode
+      dockerfile: Dockerfile
+    image: opencode-server:latest
+    container_name: workspace-opencode
+    restart: unless-stopped
+    networks:
+      - workspace-net
+    volumes:
+      # Shared project files — repositories and working files
+      - workspace_projects:/home/workspace/projects
+      # Global opencode config, skills, agents, MCP servers
+      - opencode_config:/home/workspace/.config/opencode
+      # Shared user profile — .gitconfig, .ssh, OAuth tokens
+      - workspace_profile:/home/workspace/.config
+      # Package manager caches (npm/pnpm/bun) for faster installs
+      - package_caches:/home/workspace/.cache
+      # User-installed toolchains (~/.local/bin, etc.)
+      - toolchains:/home/workspace/.local
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?err}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?err}
+      - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:?err}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.opencode.rule=Host(`ai.workspace.dev`)"
+      - "traefik.http.routers.opencode.entrypoints=websecure"
+      - "traefik.http.routers.opencode.tls=true"
+      - "traefik.http.routers.opencode.tls.certresolver=letsencrypt"
+      - "traefik.http.services.opencode.loadbalancer.server.port=4096"
+    depends_on:
+      code-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u \"$${OPENCODE_SERVER_USERNAME:-opencode}:$${OPENCODE_SERVER_PASSWORD}\" http://localhost:4096/global/health > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # ── CodeNomad: AI coding web cockpit ────────────────────────────────────
+  # Custom image built from dev-base with opencode + CodeNomad globally installed.
+  codenomad-server:
+    build:
+      context: ./codenomad
+      dockerfile: Dockerfile
+    image: codenomad-server:latest
+    container_name: workspace-codenomad
+    restart: unless-stopped
+    networks:
+      - workspace-net
+    volumes:
+      # Shared project files — repositories and working files
+      - workspace_projects:/home/workspace/projects
+      # Private chat history, instances, sessions
+      - codenomad_config:/home/workspace/.config/codenomad
+      # Global opencode config (read-only) — for CodeNomad to invoke opencode
+      - opencode_config:/home/workspace/.config/opencode:ro
+      # Shared user profile — .gitconfig, .ssh, OAuth tokens
+      - workspace_profile:/home/workspace/.config
+      # Package manager caches for faster installs
+      - package_caches:/home/workspace/.cache
+      # User-installed toolchains
+      - toolchains:/home/workspace/.local
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?err}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?err}
+      - CODENOMAD_SERVER_USERNAME=${CODENOMAD_SERVER_USERNAME:?err}
+      - CODENOMAD_SERVER_PASSWORD=${CODENOMAD_SERVER_PASSWORD:?err}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.codenomad.rule=Host(`codenomad.workspace.dev`)"
+      - "traefik.http.routers.codenomad.entrypoints=websecure"
+      - "traefik.http.routers.codenomad.tls=true"
+      - "traefik.http.routers.codenomad.tls.certresolver=letsencrypt"
+      - "traefik.http.services.codenomad.loadbalancer.server.port=9898"
+      - "traefik.http.services.codenomad.loadbalancer.server.scheme=https"
+    depends_on:
+      opencode-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk -o /dev/null -w '%{http_code}' https://localhost:9898/ | grep -qE '^[23]' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # ── KasmVNC: Browser-accessible Linux desktop ────────────────────────────
+  # Custom image built from kasmweb/core-ubuntu-jammy with dev tools overlay.
+  # Provides noVNC web interface on port 6901 (HTTPS).
+  # Resource-limited to 4 GB RAM to protect host from OOM.
+  kasmvnc-workspace:
+    build:
+      context: ./kasmvnc
+      dockerfile: Dockerfile
+    image: kasmvnc-workspace:latest
+    container_name: workspace-kasmvnc
+    restart: unless-stopped
+    networks:
+      - workspace-net
+    volumes:
+      # Shared project files — browse and edit from the desktop
+      - workspace_projects:/home/kasm-user/projects
+      # Desktop session home — separate from shared profile to avoid cache pollution
+      - workspace_home:/home/kasm-user
+      # VNC password and desktop settings
+      - kasm_config:/home/kasm-user/.vnc
+    environment:
+      - VNC_PW=${KASMVNC_PASSWORD:?err}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kasmvnc.rule=Host(`desktop.workspace.dev`)"
+      - "traefik.http.routers.kasmvnc.entrypoints=websecure"
+      - "traefik.http.routers.kasmvnc.tls=true"
+      - "traefik.http.routers.kasmvnc.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kasmvnc.loadbalancer.server.port=6901"
+      - "traefik.http.services.kasmvnc.loadbalancer.server.scheme=https"
+    depends_on:
+      code-server:
+        condition: service_started
+      opencode-server:
+        condition: service_started
+      codenomad-server:
+        condition: service_started
+    healthcheck:
+      # TCP-level probe: KasmVNC blacklists 127.0.0.1 connections, so HTTP(S)
+      # healthchecks to localhost fail. Instead we check the port is listening.
+      test: ["CMD-SHELL", "ss -tlnp | grep -q ':6901' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    shm_size: 2gb
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+# ── Networking ─────────────────────────────────────────────────────────────
+# Internal bridge network for inter-service DNS resolution.
+# Traefik reaches containers via the Dokploy shared network (external).
+networks:
+  workspace-net:
+    name: workspace-net
+    driver: bridge
+
+
+# ── Volumes ────────────────────────────────────────────────────────────────
+# Named volumes for persistent storage across restarts and redeploys.
+# Volumes marked `external: true` must be pre-created (see scripts/bootstrap.sh)
+# so ownership (UID 1000) is set before any container writes.
+#
+# Volume reference:
+#   workspace_projects   — all services    — repositories and working files
+#   workspace_profile    — opencode,       — ~/.config, ~/.ssh, OAuth tokens
+#                          code-server,
+#                          KasmVNC
+#   workspace_home       — KasmVNC         — Desktop session home
+#   opencode_config      — opencode,       — global config, skills, agents, MCP
+#                          CodeNomad (ro)
+#   codenomad_config     — CodeNomad       — sessions, chat history, instances
+#   code_server_config   — code-server     — VS Code extensions and settings
+#   kasm_config          — KasmVNC         — VNC password and desktop settings
+#   package_caches       — CLI containers  — optional npm/pnpm/bun caches
+#   toolchains           — CLI containers  — user-installed binaries (~/.local)
+volumes:
+  # Bootstrap-managed volumes (pre-created by scripts/bootstrap.sh)
+  workspace_projects:
+    external: true
+  workspace_profile:
+    external: true
+  toolchains:
+    external: true
+
+  # Auto-created volumes (Docker creates them on first deploy)
+  workspace_home:
+  opencode_config:
+  codenomad_config:
+  code_server_config:
+  kasm_config:
+  package_caches:
