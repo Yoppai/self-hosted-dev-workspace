@@ -7,6 +7,15 @@
 #   ./scripts/smoke-test.sh              # full suite
 #   ./scripts/smoke-test.sh --quick      # skip image build, test running stack
 #   ./scripts/smoke-test.sh --build-only # build images only, no runtime checks
+#   ./scripts/smoke-test.sh --ci         # CI mode: verify images exist + ARM64
+#
+# CI mode (--ci):
+#   Used in GitHub Actions workflows after docker/build-push-action completes.
+#   Does NOT build or start the stack — assumes images already exist in the
+#   local Docker daemon from the build step. Verifies:
+#     - All 4 custom images are present
+#     - Each image targets linux/arm64
+#   Exit code 0 = all images present and ARM64; 1 = missing or wrong arch.
 #
 # Design:
 #   - Builds all custom images (dev-base, opencode, codenomad, kasmvnc)
@@ -92,12 +101,49 @@ require_command docker
 
 QUICK_MODE=false
 BUILD_ONLY=false
+CI_MODE=false
 for arg in "$@"; do
     case "$arg" in
         --quick) QUICK_MODE=true ;;
         --build-only) BUILD_ONLY=true ;;
+        --ci) CI_MODE=true ;;
     esac
 done
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CI MODE: Verify images exist in daemon and are ARM64
+# ═══════════════════════════════════════════════════════════════════════════
+
+if $CI_MODE; then
+    banner "CI Mode — Image Verification"
+
+    CI_IMAGES=(
+        "dev-base:latest"
+        "opencode-server:latest"
+        "codenomad-server:latest"
+        "kasmvnc-workspace:latest"
+    )
+
+    for img in "${CI_IMAGES[@]}"; do
+        if docker image inspect "$img" &>/dev/null; then
+            arch=$(docker image inspect --format '{{.Architecture}}' "$img" 2>/dev/null)
+            if [[ "$arch" == "arm64" ]] || [[ "$arch" == "aarch64" ]]; then
+                ok "${img} exists — arch: ${arch}"
+            else
+                fail "${img}: arch = ${arch} (expected arm64)"
+            fi
+        else
+            fail "${img}: not found in local Docker daemon"
+        fi
+    done
+
+    echo ""
+    echo "  ╔══════════════════════════════════════════════════╗"
+    printf "  ║  Results:  %d passed · %d failed · %d skipped      ║\n" $PASS $FAIL $SKIP
+    echo "  ╚══════════════════════════════════════════════════╝"
+    echo ""
+    [[ $FAIL -eq 0 ]] && exit 0 || exit 1
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1: Build images
