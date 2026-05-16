@@ -250,7 +250,7 @@ Reglas:
 ### Riesgos técnicos
 
 | Riesgo | Impacto | Mitigación |
-|---|---|---|
+|---|---|---|---|
 | Incompatibilidad de imágenes ARM64 | El servicio no puede correr en Oracle A1 | Exigir validación ARM64 para cada imagen antes de aceptar el MVP |
 | Acoplamiento CodeNomad/opencode | CodeNomad puede romperse ante cambios de opencode | Pinear versiones y probar ambos juntos en la misma imagen/runtime |
 | Permisos en volúmenes compartidos | Las herramientas fallan al leer/escribir archivos | Estandarizar UID/GID y documentar ownership de mounts |
@@ -258,6 +258,8 @@ Reglas:
 | Crecimiento de disco por cachés/repos | El disco del VPS se llena con el tiempo | Separar volúmenes de caché y definir política de limpieza |
 | Falta de health checks estándar | Dokploy puede no detectar apps rotas | Agregar health checks custom por servicio cuando sea posible |
 | Uso de recursos de KasmVNC | El escritorio puede consumir CPU/RAM | Definir límites de recursos y monitorear durante el MVP |
+| Runner offline bloquea CI | Alto | systemd auto-restart + health check para el contenedor del runner |
+| Dependabot PRs excesivos | Bajo | límite de 5 PRs abiertos + weekly cadence |
 
 ### Fases de rollout
 
@@ -276,6 +278,15 @@ Reglas:
 - Pinear versiones de todos los servicios.
 - Documentar procedimiento de restore.
 - Agregar script base de bootstrap para Node.js, Bun, pnpm, Git y herramientas comunes de desarrollo.
+
+#### v1.2 — CI/CD Automation
+
+- GitHub Actions CI/CD pipeline for automated ARM64 Docker image builds
+- Self-hosted runner on Oracle Cloud VPS
+- Push to GitHub Container Registry (GHCR)
+- Dokploy webhook integration for auto-deploy
+- Dependabot for automated dependency version checking (Docker + npm)
+- Auto-merge for patch-level dependency updates
 
 #### v2.0
 
