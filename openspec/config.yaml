@@ -1,0 +1,42 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Personal self-hosted development workspace on Dokploy (VPS).
+  Greenfield project — no source code yet.
+  Stack: Docker Compose, Dokploy, Traefik, Cloudflare Access.
+  Services: code-server, opencode, CodeNomad, KasmVNC.
+  Target infra: Oracle Cloud A1 Flex (linux/arm64, 4 OCPU, 24 GB RAM).
+  Persistence: shared Docker volumes for projects, config, and toolchains.
+  Existing PRD: docs/prd-self-hosted-workspace.md.
+  Execution mode: auto.
+  Delivery strategy: auto-chain.
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - State which services are affected
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Reference infra assumptions (ARM64, Oracle A1 Flex)
+  design:
+    - Include service dependency diagram for complex flows
+    - Document volume mount decisions with rationale
+    - Specify UID/GID strategy for shared volumes
+  tasks:
+    - Group by Docker service, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Separate infra setup from service configuration
+  apply:
+    - Follow existing Docker Compose patterns
+    - Validate ARM64 compatibility before accepting changes
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: docker compose build
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
+    - Archive state must include volume migration notes
