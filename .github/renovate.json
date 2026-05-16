@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+
+  "schedule": ["before 9am on Monday"],
+  "timezone": "UTC",
+  "labels": ["dependencies", "type:chore"],
+  "prConcurrentLimit": 5,
+  "commitMessagePrefix": "chore(deps)",
+
+  "packageRules": [
+    {
+      "description": "Auto-merge patch and digest updates",
+      "matchUpdateTypes": ["patch", "digest"],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Group opencode-ai updates across both Dockerfiles into one PR",
+      "matchPackageNames": ["opencode-ai"],
+      "groupName": "opencode-ai",
+      "commitMessageTopic": "opencode-ai"
+    }
+  ],
+
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update opencode-ai ARG in opencode/Dockerfile",
+      "fileMatch": ["(^|/)opencode/Dockerfile$"],
+      "matchStrings": [
+        "ARG OPENCODE_VERSION=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "opencode-ai",
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "Update opencode-ai ARG in codenomad/Dockerfile",
+      "fileMatch": ["(^|/)codenomad/Dockerfile$"],
+      "matchStrings": [
+        "ARG OPENCODE_VERSION=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "opencode-ai",
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "Update @neuralnomads/codenomad ARG in codenomad/Dockerfile",
+      "fileMatch": ["(^|/)codenomad/Dockerfile$"],
+      "matchStrings": [
+        "ARG CODENOMAD_VERSION=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "@neuralnomads/codenomad",
+      "datasourceTemplate": "npm"
+    }
+  ]
+}
