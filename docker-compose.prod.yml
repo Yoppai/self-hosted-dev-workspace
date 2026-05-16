@@ -1,28 +1,18 @@
-# docker-compose.yml — Local Development
-# =======================================
-# Self-Hosted Workspace MVP — All Services
+# docker-compose.prod.yml — Production Override
+# ==============================================
+# CI-produced version of the workspace stack.
+# Images are pre-built by GitHub Actions and pushed to GHCR.
+# This file references the GHCR-hosted images instead of building locally.
 #
-# ## Local development
-#   Use this file with `docker compose build` to build images from source.
-#   cp .env.example .env
-#   docker compose build
-#   docker compose up -d
+# ## Usage (deployed by Dokploy)
+#   Dokploy reads this file and pulls the CI-built images from GHCR.
+#   No local build step — images are fetched directly from the registry.
 #
-# ## Production (CI-built images)
-#   For deployment using CI-built images from GHCR, use docker-compose.prod.yml.
-#   The prod file has `build:` sections removed and `image:` paths pointing to
-#   ghcr.io/yoppai/self-hosted-dev-workspace/*:latest.
+# ## Relationship to docker-compose.yml
+#   - docker-compose.yml: For local development with `docker compose build`
+#   - docker-compose.prod.yml: For production (CI-built images from GHCR)
 #
-# Deploys code-server, opencode-server, CodeNomad, and KasmVNC behind
-# Traefik HTTPS. KasmVNC provides a browser-accessible Linux desktop.
-#
-## Dokploy deployment
-#   This Compose file is designed for Dokploy's Compose service type.
-#   Set environment variables in Dokploy's env UI (see .env.example).
-#   Volumes marked `external: true` must exist before first deploy
-#   (run scripts/bootstrap.sh or `docker volume create`).
-#
-## Architecture notes
+# ## Architecture notes
 #   - No service ports are published to the host interface.
 #     Traefik is the sole ingress point (via Dokploy network).
 #   - All services run as UID 1000 for shared-volume compatibility.
@@ -31,7 +21,7 @@
 
 services:
   # ── code-server: VS Code in the browser ─────────────────────────────────
-  # Official image, no custom build needed.
+  # Official image, no custom build needed. Same as docker-compose.yml.
   code-server:
     image: codercom/code-server:4.97.2
     container_name: workspace-code-server
@@ -62,12 +52,9 @@ services:
       retries: 3
 
   # ── opencode-server: AI coding assistant CLI/server ─────────────────────
-  # Custom image built from dev-base with opencode globally installed.
+  # Custom image, CI-built and pushed to GHCR.
   opencode-server:
-    build:
-      context: ./opencode
-      dockerfile: Dockerfile
-    image: opencode-server:latest
+    image: ghcr.io/yoppai/self-hosted-dev-workspace/opencode-server:latest
     container_name: workspace-opencode
     restart: unless-stopped
     networks:
@@ -106,12 +93,9 @@ services:
       retries: 3
 
   # ── CodeNomad: AI coding web cockpit ────────────────────────────────────
-  # Custom image built from dev-base with opencode + CodeNomad globally installed.
+  # Custom image, CI-built and pushed to GHCR.
   codenomad-server:
-    build:
-      context: ./codenomad
-      dockerfile: Dockerfile
-    image: codenomad-server:latest
+    image: ghcr.io/yoppai/self-hosted-dev-workspace/codenomad-server:latest
     container_name: workspace-codenomad
     restart: unless-stopped
     networks:
@@ -153,14 +137,9 @@ services:
       retries: 3
 
   # ── KasmVNC: Browser-accessible Linux desktop ────────────────────────────
-  # Custom image built from kasmweb/core-ubuntu-jammy with dev tools overlay.
-  # Provides noVNC web interface on port 6901 (HTTPS).
-  # Resource-limited to 4 GB RAM to protect host from OOM.
+  # Custom image, CI-built and pushed to GHCR.
   kasmvnc-workspace:
-    build:
-      context: ./kasmvnc
-      dockerfile: Dockerfile
-    image: kasmvnc-workspace:latest
+    image: ghcr.io/yoppai/self-hosted-dev-workspace/kasmvnc-workspace:latest
     container_name: workspace-kasmvnc
     restart: unless-stopped
     networks:
@@ -190,8 +169,6 @@ services:
       codenomad-server:
         condition: service_started
     healthcheck:
-      # TCP-level probe: KasmVNC blacklists 127.0.0.1 connections, so HTTP(S)
-      # healthchecks to localhost fail. Instead we check the port is listening.
       test: ["CMD-SHELL", "ss -tlnp | grep -q ':6901' || exit 1"]
       interval: 30s
       timeout: 10s
@@ -204,8 +181,6 @@ services:
           memory: 4g
 
 # ── Networking ─────────────────────────────────────────────────────────────
-# Internal bridge network for inter-service DNS resolution.
-# Traefik reaches containers via the Dokploy shared network (external).
 networks:
   workspace-net:
     name: workspace-net
@@ -213,23 +188,6 @@ networks:
 
 
 # ── Volumes ────────────────────────────────────────────────────────────────
-# Named volumes for persistent storage across restarts and redeploys.
-# Volumes marked `external: true` must be pre-created (see scripts/bootstrap.sh)
-# so ownership (UID 1000) is set before any container writes.
-#
-# Volume reference:
-#   workspace_projects   — all services    — repositories and working files
-#   workspace_profile    — opencode,       — ~/.config, ~/.ssh, OAuth tokens
-#                          code-server,
-#                          KasmVNC
-#   workspace_home       — KasmVNC         — Desktop session home
-#   opencode_config      — opencode,       — global config, skills, agents, MCP
-#                          CodeNomad (ro)
-#   codenomad_config     — CodeNomad       — sessions, chat history, instances
-#   code_server_config   — code-server     — VS Code extensions and settings
-#   kasm_config          — KasmVNC         — VNC password and desktop settings
-#   package_caches       — CLI containers  — optional npm/pnpm/bun caches
-#   toolchains           — CLI containers  — user-installed binaries (~/.local)
 volumes:
   # Bootstrap-managed volumes (pre-created by scripts/bootstrap.sh)
   workspace_projects:
