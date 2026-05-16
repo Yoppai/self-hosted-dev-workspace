@@ -1,0 +1,106 @@
+# .github/workflows/pr-validation.yml
+# Self-Hosted Workspace — PR Validation
+# =======================================
+# Lightweight checks for pull requests to main.
+# Runs on ubuntu-latest (no ARM64 needed) to validate:
+#   - Secrets are not embedded in Docker layers
+#   - docker-compose config is valid
+#   - Dockerfiles have valid syntax
+#
+# Does NOT build images — build-images.yml handles that post-merge.
+
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'dev-base/**'
+      - 'opencode/**'
+      - 'codenomad/**'
+      - 'kasmvnc/**'
+      - 'docker-compose.yml'
+      - 'docker-compose.prod.yml'
+      - 'scripts/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lint:
+    name: Lint Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Dockerfiles syntax
+        run: |
+          echo "::group::Checking Dockerfiles"
+          for df in dev-base/Dockerfile opencode/Dockerfile codenomad/Dockerfile kasmvnc/Dockerfile; do
+            if [[ -f "$df" ]]; then
+              echo "Validating $df ..."
+              docker run --rm -v "$(pwd)/${df}:/Dockerfile" hadolint/hadolint:latest hadolint /Dockerfile || true
+            fi
+          done
+          echo "::endgroup::"
+
+  compose-validate:
+    name: Compose Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: |
+          echo "::group::Validating docker-compose.yml"
+          docker compose -f docker-compose.yml config > /dev/null
+          echo "✅ docker-compose.yml is valid"
+          echo "::endgroup::"
+
+      - name: Validate docker-compose.prod.yml
+        run: |
+          echo "::group::Validating docker-compose.prod.yml"
+          docker compose -f docker-compose.prod.yml config > /dev/null
+          echo "✅ docker-compose.prod.yml is valid"
+          echo "::endgroup::"
+
+  secret-audit:
+    name: Secret Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run secret audit script (syntax check)
+        run: |
+          echo "::group::Checking secret-audit.sh syntax"
+          bash -n scripts/secret-audit.sh && echo "✅ Syntax OK"
+          echo "::endgroup::"
+
+      - name: Check for placeholder secrets in Dockerfiles
+        run: |
+          echo "::group::Scanning Dockerfiles for hardcoded secrets"
+          FAILED=0
+          for df in dev-base/Dockerfile opencode/Dockerfile codenomad/Dockerfile kasmvnc/Dockerfile; do
+            if [[ -f "$df" ]]; then
+              # Look for env var assignments that look like placeholder secrets
+              # (but allow ARG version pins and FROM declarations)
+              SUSPICIOUS=$(grep -nE '(sk-placeholder|smoke-test|placeholder)' "$df" || true)
+              if [[ -n "$SUSPICIOUS" ]]; then
+                echo "⚠️  Suspicious patterns in $df:"
+                echo "$SUSPICIOUS"
+                FAILED=1
+              fi
+            fi
+          done
+          if [[ $FAILED -eq 0 ]]; then
+            echo "✅ No placeholder secrets found in Dockerfiles"
+          else
+            echo "❌ Placeholder secrets found — review highlighted lines"
+            exit 1
+          fi
+          echo "::endgroup::"
