@@ -29,7 +29,7 @@
     {
       "customType": "regex",
       "description": "Update opencode-ai ARG in opencode/Dockerfile",
-      "fileMatch": ["(^|/)opencode/Dockerfile$"],
+      "managerFilePatterns": ["/(^|/)opencode/Dockerfile$/"],
       "matchStrings": [
         "ARG OPENCODE_VERSION=(?<currentValue>\\S+)"
       ],
@@ -39,7 +39,7 @@
     {
       "customType": "regex",
       "description": "Update opencode-ai ARG in codenomad/Dockerfile",
-      "fileMatch": ["(^|/)codenomad/Dockerfile$"],
+      "managerFilePatterns": ["/(^|/)codenomad/Dockerfile$/"],
       "matchStrings": [
         "ARG OPENCODE_VERSION=(?<currentValue>\\S+)"
       ],
@@ -49,7 +49,7 @@
     {
       "customType": "regex",
       "description": "Update @neuralnomads/codenomad ARG in codenomad/Dockerfile",
-      "fileMatch": ["(^|/)codenomad/Dockerfile$"],
+      "managerFilePatterns": ["/(^|/)codenomad/Dockerfile$/"],
       "matchStrings": [
         "ARG CODENOMAD_VERSION=(?<currentValue>\\S+)"
       ],
