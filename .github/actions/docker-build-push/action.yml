@@ -52,7 +52,7 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
-        password: ${{ secrets.GHCR_TOKEN }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract version tags from Dockerfile ARGs
       id: version_tags

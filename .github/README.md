@@ -42,11 +42,10 @@ These secrets must be configured in the repository's **Settings → Secrets and 
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
-| `GHCR_TOKEN` | `build-images.yml` | Push images to `ghcr.io/yoppai/self-hosted-dev-workspace/*` |
-| `DOKPLOY_WEBHOOK_URL` | `build-images.yml` | POST deploy trigger to Dokploy after successful build |
-| `DOKPLOY_WEBHOOK_SECRET` | `build-images.yml` | Shared secret for webhook authentication |
+| `DOKPLOY_WEBHOOK_URL` | `build-images.yml` | POST deploy trigger to Dokploy Compose webhook after successful build |
 
-> ⚠️ `GHCR_TOKEN` requires `packages: write` scope. Create it as a fine-grained token with access to this repository only.
+> 💡 GHCR authentication uses GitHub's built-in `GITHUB_TOKEN` — no manual secret needed. The workflow declares `permissions.packages: write`, which auto-provisions the token.
+> `DOKPLOY_WEBHOOK_URL` is obtained from Dokploy UI → Service → Webhook. The old `DOKPLOY_WEBHOOK_SECRET` secret is no longer used.
 
 ---
 
@@ -150,6 +149,6 @@ Major and minor updates require manual review.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Runner offline | VPS rebooted, container stopped | Check `systemctl status actions.runner.*` on VPS; runner has `restart: unless-stopped` |
-| Workflow fails on push | `GHCR_TOKEN` missing or expired | Verify token in repo secrets; create new fine-grained PAT with `packages: write` |
-| Webhook POST fails | Dokploy URL changed or unreachable | Non-fatal — images remain in GHCR; deploy manually via Dokploy UI |
+| Workflow fails on push | `GITHUB_TOKEN` lacks `packages` scope | Verify `permissions.packages: write` is set in the workflow file |
+| Webhook POST fails | `DOKPLOY_WEBHOOK_URL` missing or changed | Non-fatal — images remain in GHCR; deploy manually via Dokploy UI; verify webhook URL in Dokploy → Service → Webhook |
 | Cache miss, slow builds | `no-cache` was set, or GHA cache evicted | Next scheduled build will populate cache; cache uses `type=gha,mode=max` |

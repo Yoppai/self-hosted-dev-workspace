@@ -24,8 +24,8 @@
 #
 # Environment:
 #   - runs-on: self-hosted (ARM64 Oracle VPS) for native ARM64 builds
-#   - GHCR auth via secrets.GHCR_TOKEN
-#   - Dokploy webhook via secrets.DOKPLOY_WEBHOOK_URL
+#   - GHCR auth via GITHUB_TOKEN (permissions.packages: write)
+#   - Dokploy Compose webhook via secrets.DOKPLOY_WEBHOOK_URL
 
 name: Build Images
 
@@ -280,7 +280,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push ${{ matrix.name }}
         shell: bash
@@ -334,7 +334,7 @@ jobs:
           echo "✅ ${{ matrix.name }} — all tags pushed to GHCR"
           echo "::endgroup::"
 
-  # ── Job: Notify Dokploy (non-fatal on failure) ───────────────────────────
+  # ── Job: Notify Dokploy Compose webhook (non-fatal on failure) ──────────
   # Only runs after images are successfully pushed to GHCR.
   notify-dokploy:
     name: Notify Dokploy
@@ -344,31 +344,29 @@ jobs:
     continue-on-error: true
 
     steps:
-      - name: POST to Dokploy webhook
+      - name: POST to Dokploy Compose webhook
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_WEBHOOK_URL }}
-          DOKPLOY_SECRET: ${{ secrets.DOKPLOY_WEBHOOK_SECRET }}
         run: |
-          echo "::group::Notify Dokploy deploy webhook"
+          echo "::group::Notify Dokploy Compose webhook"
 
           if [[ -z "$DOKPLOY_URL" ]]; then
-            echo "::warning::DOKPLOY_WEBHOOK_URL not configured — skipping deploy notification"
+            echo "::warning::DOKPLOY_WEBHOOK_URL not configured — skipping"
             echo "::endgroup::"
             exit 0
           fi
 
-          echo "Sending deploy webhook POST ..."
+          echo "Sending Compose webhook POST ..."
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
-            $([ -n "$DOKPLOY_SECRET" ] && echo "-H \"X-Webhook-Secret: ${DOKPLOY_SECRET}\"") \
-            -d '{"event":"deploy","repository":"${{ github.repository }}","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}' \
+            -d '{"repository":"${{ github.repository }}","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}' \
             "$DOKPLOY_URL" 2>/dev/null || echo "000")
 
           if [[ "$HTTP_STATUS" =~ ^[23] ]]; then
-            echo "✅ Dokploy webhook accepted (HTTP ${HTTP_STATUS})"
+            echo "✅ Dokploy Compose webhook accepted (HTTP ${HTTP_STATUS})"
           else
-            echo "::warning::Dokploy webhook returned HTTP ${HTTP_STATUS} — deploy may not have triggered"
-            echo "    This is non-fatal. The images are in GHCR and can be deployed manually."
+            echo "::warning::Dokploy Compose webhook returned HTTP ${HTTP_STATUS} — deploy may not have triggered"
+            echo "    This is non-fatal. The images are in GHCR and can be deployed manually via Dokploy UI."
           fi
           echo "::endgroup::"
