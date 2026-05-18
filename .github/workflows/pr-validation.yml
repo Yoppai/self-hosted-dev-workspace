@@ -50,6 +50,15 @@ jobs:
   compose-validate:
     name: Compose Validation
     runs-on: ubuntu-latest
+    env:
+      # Dummy values for compose config validation — ${VAR:?err} requires them set
+      CODE_SERVER_PASSWORD: dummy
+      OPENCODE_SERVER_PASSWORD: dummy
+      CODENOMAD_SERVER_USERNAME: dummy
+      CODENOMAD_SERVER_PASSWORD: dummy
+      KASMVNC_PASSWORD: dummy
+      ANTHROPIC_API_KEY: dummy
+      OPENAI_API_KEY: dummy
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
