@@ -114,8 +114,8 @@ services:
       # User-installed toolchains
       - toolchains:/home/workspace/.local
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?err}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:?err}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - CODENOMAD_SERVER_USERNAME=${CODENOMAD_SERVER_USERNAME:?err}
       - CODENOMAD_SERVER_PASSWORD=${CODENOMAD_SERVER_PASSWORD:?err}
     labels:
