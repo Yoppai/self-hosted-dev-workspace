@@ -71,8 +71,8 @@ services:
       # User-installed toolchains (~/.local/bin, etc.)
       - toolchains:/home/workspace/.local
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?err}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:?err}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:?err}
     labels:

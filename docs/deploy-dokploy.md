@@ -80,10 +80,10 @@ This creates three external volumes with UID 1000 ownership:
 
 In the **Environment** tab of the Compose service, add these variables:
 
+**Required:**
+
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key for opencode-server and CodeNomad |
-| `OPENAI_API_KEY` | OpenAI API key for opencode-server and CodeNomad |
 | `CODE_SERVER_PASSWORD` | Password for code-server web UI |
 | `OPENCODE_SERVER_USERNAME` | Username for opencode-server (default: `opencode`) |
 | `OPENCODE_SERVER_PASSWORD` | Password for opencode-server |
@@ -91,7 +91,14 @@ In the **Environment** tab of the Compose service, add these variables:
 | `CODENOMAD_SERVER_PASSWORD` | Password for CodeNomad server |
 | `KASMVNC_PASSWORD` | VNC password for KasmVNC desktop |
 
-> The `docker-compose.prod.yml` uses `${VAR:?err}` syntax — Dokploy will fail fast on deploy if any required variable is missing.
+**Optional** (can be configured via each service's UI/TUI):
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Anthropic API key for opencode-server and CodeNomad |
+| `OPENAI_API_KEY` | OpenAI API key for opencode-server and CodeNomad |
+
+> Required vars use `${VAR:?err}` — Dokploy will fail fast on deploy if missing. Optional vars use `${VAR:-}` and default to empty; the user configures them through each service's UI.
 
 ---
 

@@ -50,15 +50,6 @@ jobs:
   compose-validate:
     name: Compose Validation
     runs-on: ubuntu-latest
-    env:
-      # Dummy values for compose config validation — ${VAR:?err} requires them set
-      CODE_SERVER_PASSWORD: dummy
-      OPENCODE_SERVER_PASSWORD: dummy
-      CODENOMAD_SERVER_USERNAME: dummy
-      CODENOMAD_SERVER_PASSWORD: dummy
-      KASMVNC_PASSWORD: dummy
-      ANTHROPIC_API_KEY: dummy
-      OPENAI_API_KEY: dummy
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,14 +57,24 @@ jobs:
       - name: Validate docker-compose.yml
         run: |
           echo "::group::Validating docker-compose.yml"
-          docker compose -f docker-compose.yml config > /dev/null
+          CODE_SERVER_PASSWORD=dummy \
+          OPENCODE_SERVER_PASSWORD=dummy \
+          CODENOMAD_SERVER_USERNAME=dummy \
+          CODENOMAD_SERVER_PASSWORD=dummy \
+          KASMVNC_PASSWORD=dummy \
+            docker compose -f docker-compose.yml config > /dev/null
           echo "✅ docker-compose.yml is valid"
           echo "::endgroup::"
 
       - name: Validate docker-compose.prod.yml
         run: |
           echo "::group::Validating docker-compose.prod.yml"
-          docker compose -f docker-compose.prod.yml config > /dev/null
+          CODE_SERVER_PASSWORD=dummy \
+          OPENCODE_SERVER_PASSWORD=dummy \
+          CODENOMAD_SERVER_USERNAME=dummy \
+          CODENOMAD_SERVER_PASSWORD=dummy \
+          KASMVNC_PASSWORD=dummy \
+            docker compose -f docker-compose.prod.yml config > /dev/null
           echo "✅ docker-compose.prod.yml is valid"
           echo "::endgroup::"
 
