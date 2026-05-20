@@ -33,7 +33,7 @@ services:
   # ── code-server: VS Code in the browser ─────────────────────────────────
   # Official image, no custom build needed.
   code-server:
-    image: codercom/code-server:4.97.2
+    image: codercom/code-server:4.118.0
     container_name: workspace-code-server
     restart: unless-stopped
     networks:
