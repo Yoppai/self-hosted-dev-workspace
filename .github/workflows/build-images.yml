@@ -152,6 +152,7 @@ jobs:
           push: true
           include-latest-tag: false
           include-version-tags: false
+          registry-token: ${{ secrets.GITHUB_TOKEN }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
   # ── Job: Build kasmvnc (independent — no dev-base dependency) ────────────
@@ -177,6 +178,7 @@ jobs:
           push: true
           include-latest-tag: false
           include-version-tags: false
+          registry-token: ${{ secrets.GITHUB_TOKEN }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
   # ── Job: Build opencode-server (needs dev-base) ──────────────────────────
@@ -204,6 +206,7 @@ jobs:
           push: true
           include-latest-tag: false
           include-version-tags: false
+          registry-token: ${{ secrets.GITHUB_TOKEN }}
           build-contexts: |
             dev-base:latest=docker-image://ghcr.io/${{ env.GHCR_OWNER }}/dev-base:sha-${{ steps.short-sha.outputs.value }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
@@ -233,6 +236,7 @@ jobs:
           push: true
           include-latest-tag: false
           include-version-tags: false
+          registry-token: ${{ secrets.GITHUB_TOKEN }}
           build-contexts: |
             dev-base:latest=docker-image://ghcr.io/${{ env.GHCR_OWNER }}/dev-base:sha-${{ steps.short-sha.outputs.value }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}

@@ -67,6 +67,9 @@ inputs:
     description: 'Set up QEMU for cross-platform emulation (default: true)'
     required: false
     default: 'true'
+  registry-token:
+    description: 'Token for GHCR authentication'
+    required: true
   build-contexts:
     description: 'Additional BuildKit build contexts (newline-separated)'
     required: false
@@ -87,7 +90,7 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ inputs.registry-token }}
 
     - name: Extract image tags
       id: version_tags
