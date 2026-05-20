@@ -1,29 +1,37 @@
 # .github/workflows/build-images.yml
-# Self-Hosted Workspace — ARM64 Image Build, Validate, Push & Deploy
-# ===================================================================
-# Main CI workflow that builds, validates, pushes, and deploys all
-# workspace Docker images to GHCR.
+# Self-Hosted Workspace — ARM64 Image Build, Validate, Promote & Deploy
+# =====================================================================
+# Main CI workflow that cross-builds ARM64 images via QEMU + buildx on
+# GitHub-hosted ubuntu-latest runners, validates, promotes, and deploys
+# all workspace Docker images to GHCR.
 #
-# CRITICAL DESIGN RULE: Images are NEVER pushed before validation/smoke
-# tests pass. Build jobs use load:true only; a separate push-images job
-# runs only after validate succeeds. This prevents broken images from
-# reaching production.
+# CRITICAL DESIGN RULE: Images are NEVER published with `latest` or
+# version tags before validation. Build jobs push only immutable
+# sha-<short> tags to GHCR. A separate promote-images job runs only after
+# validate succeeds (main branch only) and uses `buildx imagetools create`
+# to attach `latest` and version tags — no layer re-push.
+#
+# Registry handoff:
+#   1. Build jobs → push sha-<short> tags only (immutable, private to run)
+#   2. Validate job → pull sha tags from GHCR, verify arch, smoke check
+#   3. Promote job → add latest + version tags via imagetools create
+#   4. Notify Dokploy → trigger deploy webhook
 #
 # Job dependency graph:
 #   changes (paths-filter)
 #     ├── build-dev-base ─┬─ build-opencode ─┐
 #     │                   ├─ build-codenomad ─┤
-#     ├── build-kasmvnc ──┘                   ├─ validate ── push-images ── notify-dokploy
+#     ├── build-kasmvnc ──┘                   ├─ validate ── promote-images ── notify-dokploy
 #     └─ (build-all flag)                     ┘
 #
 # Triggers:
 #   - push:main (path-filtered by Dockerfile directory)
-#   - pull_request (path-filtered; builds only, no push)
+#   - pull_request (path-filtered; builds/validates only, no promotion)
 #   - workflow_dispatch (manual, optional no-cache)
 #   - schedule (Monday 03:00 UTC, no-cache, picks up OS patches)
 #
 # Environment:
-#   - runs-on: self-hosted (ARM64 Oracle VPS) for native ARM64 builds
+#   - runs-on: ubuntu-latest (cross-build ARM64 via QEMU)
 #   - GHCR auth via GITHUB_TOKEN (permissions.packages: write)
 #   - Dokploy Compose webhook via secrets.DOKPLOY_WEBHOOK_URL
 
@@ -38,6 +46,8 @@ on:
       - 'opencode/**'
       - 'codenomad/**'
       - 'kasmvnc/**'
+      - '.github/workflows/build-images.yml'
+      - '.github/actions/docker-build-push/**'
   pull_request:
     branches:
       - main
@@ -46,6 +56,8 @@ on:
       - 'opencode/**'
       - 'codenomad/**'
       - 'kasmvnc/**'
+      - '.github/workflows/build-images.yml'
+      - '.github/actions/docker-build-push/**'
   workflow_dispatch:
     inputs:
       no-cache:
@@ -63,7 +75,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  GHCR_OWNER: ${{ github.repository_owner }}
+  GHCR_OWNER: yoppai
 
 jobs:
   # ── Job: Change detection (paths-filter) ──────────────────────────────────
@@ -71,12 +83,13 @@ jobs:
   # On schedule and workflow_dispatch: ALL images are rebuilt regardless.
   changes:
     name: Detect changes
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       dev-base: ${{ steps.filter.outputs.dev-base }}
       opencode: ${{ steps.filter.outputs.opencode }}
       codenomad: ${{ steps.filter.outputs.codenomad }}
       kasmvnc: ${{ steps.filter.outputs.kasmvnc }}
+      ci: ${{ steps.filter.outputs.ci }}
       build-all: ${{ steps.build-all.outputs.value }}
 
     steps:
@@ -96,12 +109,15 @@ jobs:
               - 'codenomad/**'
             kasmvnc:
               - 'kasmvnc/**'
+            ci:
+              - '.github/workflows/build-images.yml'
+              - '.github/actions/docker-build-push/**'
 
       - name: Determine build-all flag
         id: build-all
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" || "${{ steps.filter.outputs.ci }}" == "true" ]]; then
             echo "value=true" >> "$GITHUB_OUTPUT"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"
@@ -111,10 +127,11 @@ jobs:
   # Only builds when:
   #   - build-all is true (schedule / workflow_dispatch), OR
   #   - dev-base/, opencode/, or codenomad/ files changed on push/PR
-  # Never pushes directly — loads into daemon for validate job.
+  # Pushes only immutable sha-<short> tag to GHCR (no latest/version tags).
   build-dev-base:
     name: Build dev-base
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     needs: changes
     if: |
       needs.changes.outputs.build-all == 'true' ||
@@ -126,19 +143,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build dev-base (load only — no push)
+      - name: Build and push dev-base (sha tag only)
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile_path: dev-base/Dockerfile
           image_name: dev-base
           build_context: ./dev-base
-          push: false
+          push: true
+          include-latest-tag: false
+          include-version-tags: false
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
   # ── Job: Build kasmvnc (independent — no dev-base dependency) ────────────
   build-kasmvnc:
     name: Build kasmvnc
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     needs: changes
     if: |
       needs.changes.outputs.build-all == 'true' ||
@@ -148,114 +168,211 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build kasmvnc-workspace (load only — no push)
+      - name: Build and push kasmvnc-workspace (sha tag only)
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile_path: kasmvnc/Dockerfile
           image_name: kasmvnc-workspace
           build_context: ./kasmvnc
-          push: false
+          push: true
+          include-latest-tag: false
+          include-version-tags: false
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
   # ── Job: Build opencode-server (needs dev-base) ──────────────────────────
   build-opencode:
     name: Build opencode-server
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     needs: [changes, build-dev-base]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build opencode-server (load only — no push)
+      - name: Resolve short SHA
+        id: short-sha
+        shell: bash
+        run: echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push opencode-server (sha tag only)
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile_path: opencode/Dockerfile
           image_name: opencode-server
           build_context: ./opencode
-          push: false
+          push: true
+          include-latest-tag: false
+          include-version-tags: false
+          build-contexts: |
+            dev-base:latest=docker-image://ghcr.io/${{ env.GHCR_OWNER }}/dev-base:sha-${{ steps.short-sha.outputs.value }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
   # ── Job: Build codenomad-server (needs dev-base) ─────────────────────────
   build-codenomad:
     name: Build codenomad-server
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     needs: [changes, build-dev-base]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build codenomad-server (load only — no push)
+      - name: Resolve short SHA
+        id: short-sha
+        shell: bash
+        run: echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push codenomad-server (sha tag only)
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile_path: codenomad/Dockerfile
           image_name: codenomad-server
           build_context: ./codenomad
-          push: false
+          push: true
+          include-latest-tag: false
+          include-version-tags: false
+          build-contexts: |
+            dev-base:latest=docker-image://ghcr.io/${{ env.GHCR_OWNER }}/dev-base:sha-${{ steps.short-sha.outputs.value }}
           no-cache: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.no-cache == 'true') || 'false' }}
 
-  # ── Job: Validate — ARM64 check + smoke tests ────────────────────────────
-  # Runs against locally loaded images (from build jobs with load:true).
-  # Uses arm64-validate.sh --check-only for builder setup, then inline
-  # docker inspect for loaded images. Smoke tests use --build-only per spec.
-  #
-  # Only runs if at least one build succeeded (uses always() because some
-  # build jobs may be skipped due to change detection).
+  # ── Job: Validate — pull sha tags from GHCR, verify ARM64, smoke check ─
+  # Pulls immutable sha-<short> images from GHCR (pushed by build jobs).
+  # Validates architecture and runs lightweight runtime checks.
+  # Uses always() because build jobs may be skipped by change detection.
   validate:
     name: Validate images
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [build-dev-base, build-kasmvnc, build-opencode, build-codenomad]
     if: |
       always() && (
         needs.build-dev-base.result == 'success' ||
-        needs.build-kasmvnc.result == 'success'
+        needs.build-kasmvnc.result == 'success' ||
+        needs.build-opencode.result == 'success' ||
+        needs.build-codenomad.result == 'success'
       )
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Set up QEMU for ARM64 runtime checks
+        uses: docker/setup-qemu-action@v3
 
-      - name: Verify buildx setup (arm64-validate.sh --check-only)
-        run: |
-          echo "::group::buildx setup check"
-          bash scripts/arm64-validate.sh --check-only
-          echo "::endgroup::"
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: ARM64 architecture verification
+      - name: Pull and verify architecture
         run: |
-          echo "::group::ARM64 architecture verification"
-          for img in dev-base kasmvnc-workspace opencode-server codenomad-server; do
-            IMG_TAG="ghcr.io/${GHCR_OWNER}/${img}:latest"
-            if docker image inspect "$IMG_TAG" &>/dev/null; then
-              arch=$(docker image inspect --format '{{.Architecture}}' "$IMG_TAG")
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          FAILED=0
+
+          pull_and_check() {
+            local img="$1"
+            local ghcr_img="ghcr.io/${GHCR_OWNER}/${img}:sha-${SHORT_SHA}"
+            echo "::group::Validating ${img} (${ghcr_img})"
+
+            if docker pull --platform linux/arm64 "${ghcr_img}" 2>/dev/null; then
+              arch=$(docker image inspect --format '{{.Architecture}}' "${ghcr_img}" 2>/dev/null)
               if [[ "$arch" == "arm64" ]] || [[ "$arch" == "aarch64" ]]; then
-                echo "✅ ${IMG_TAG}: ${arch}"
+                echo "✅ ${img}: ${arch}"
               else
-                echo "❌ ${IMG_TAG}: arch = ${arch} (expected arm64)"
-                exit 1
+                echo "❌ ${img}: arch = ${arch} (expected arm64)"
+                FAILED=1
               fi
             else
-              echo "⚠️  ${IMG_TAG} not found locally — may have been skipped by change detection"
+              echo "⚠️  ${img}: pull failed — image may not have been built in this run"
+              FAILED=1
             fi
-          done
-          echo "::endgroup::"
 
-      - name: Smoke test (build-only mode)
+            echo "::endgroup::"
+          }
+
+          if [[ "${{ needs.build-dev-base.result }}" == "success" ]]; then
+            pull_and_check "dev-base"
+          fi
+          if [[ "${{ needs.build-kasmvnc.result }}" == "success" ]]; then
+            pull_and_check "kasmvnc-workspace"
+          fi
+          if [[ "${{ needs.build-opencode.result }}" == "success" ]]; then
+            pull_and_check "opencode-server"
+          fi
+          if [[ "${{ needs.build-codenomad.result }}" == "success" ]]; then
+            pull_and_check "codenomad-server"
+          fi
+
+          if [[ $FAILED -gt 0 ]]; then
+            echo "❌ ${FAILED} image(s) failed architecture validation"
+            exit 1
+          fi
+          echo "✅ All pulled images pass architecture validation"
+
+      - name: Runtime smoke checks
         run: |
-          echo "::group::Smoke test (build-only)"
-          bash scripts/smoke-test.sh --build-only
-          echo "::endgroup::"
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
 
-  # ── Job: Push images to GHCR (runs AFTER validate passes) ────────────────
-  # Separate from build jobs to enforce: images never pushed before validation.
+          FAILED=0
+
+          smoke() {
+            local img="$1"
+            local ghcr_img="ghcr.io/${GHCR_OWNER}/${img}:sha-${SHORT_SHA}"
+            local cmd="$2"
+            local expect="$3"
+
+            if ! docker image inspect "${ghcr_img}" &>/dev/null; then
+              echo "   ⏭  ${img} not pulled — skipping"
+              return 0
+            fi
+
+            echo "::group::Smoke ${img}"
+            output=$(docker run --rm --platform linux/arm64 --entrypoint bash "${ghcr_img}" -lc "${cmd}" 2>/dev/null || echo "RUNTIME_FAIL")
+            if echo "$output" | grep -qE "${expect}"; then
+              echo "   ✅ ${img}: ${output}"
+            else
+              echo "   ❌ ${img}: check failed (output: ${output})"
+              FAILED=1
+            fi
+            echo "::endgroup::"
+          }
+
+          if [[ "${{ needs.build-dev-base.result }}" == "success" ]]; then
+            smoke "dev-base" "git --version && node --version" "git version"
+          fi
+          if [[ "${{ needs.build-opencode.result }}" == "success" ]]; then
+            smoke "opencode-server" "opencode --version" '[0-9]+\.[0-9]+\.[0-9]+'
+          fi
+          if [[ "${{ needs.build-codenomad.result }}" == "success" ]]; then
+            smoke "codenomad-server" "opencode --version && codenomad --version" '[0-9]+\.[0-9]+\.[0-9]+'
+          fi
+          if [[ "${{ needs.build-kasmvnc.result }}" == "success" ]]; then
+            smoke "kasmvnc-workspace" "uname -m" "aarch64"
+          fi
+
+          if [[ $FAILED -gt 0 ]]; then
+            echo "❌ Runtime smoke validation failed"
+            exit 1
+          fi
+
+  # ── Job: Promote images (runs AFTER validate passes) ────────────────────
+  # Uses docker buildx imagetools create to attach latest + version tags
+  # to the validated sha-<short> image. No layer re-push — pure tag alias.
   # Only runs on main branch (push, schedule, or workflow_dispatch targeting main).
-  # Tags: latest, sha-{7}, and version tags from ARG pins in Dockerfiles.
-  push-images:
-    name: Push images to GHCR
-    runs-on: self-hosted
-    needs: validate
-    if: success() && github.ref == 'refs/heads/main'
+  # Tags: latest, and version tags from ARG pins in Dockerfiles.
+  promote-images:
+    name: Promote images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build-dev-base, build-kasmvnc, build-opencode, build-codenomad, validate]
+    if: |
+      github.ref == 'refs/heads/main' &&
+      needs.validate.result == 'success' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
 
     strategy:
       matrix:
@@ -268,12 +385,14 @@ jobs:
             dir: opencode
           - name: codenomad-server
             dir: codenomad
-      # Don't fail all if one push fails
       fail-fast: false
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -282,64 +401,49 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push ${{ matrix.name }}
+      - name: Promote ${{ matrix.name }}
         shell: bash
         run: |
           GHCR_BASE="ghcr.io/${GHCR_OWNER}"
-          LOCAL_TAG="${GHCR_BASE}/${{ matrix.name }}:latest"
-          SHA_TAG="${GHCR_BASE}/${{ matrix.name }}:sha-${GITHUB_SHA::7}"
+          IMG_NAME="${{ matrix.name }}"
+          SHA_TAG="${GHCR_BASE}/${IMG_NAME}:sha-${GITHUB_SHA::7}"
 
-          echo "::group::Push ${{ matrix.name }}"
+          echo "::group::Promote ${IMG_NAME}"
 
-          # Skip if image wasn't built (change detection skipped it)
-          if ! docker image inspect "$LOCAL_TAG" &>/dev/null; then
-            echo "⚠️  ${LOCAL_TAG} not found locally — build was skipped, nothing to push"
+          if ! docker buildx imagetools inspect "${SHA_TAG}" &>/dev/null; then
+            echo "⚠️  ${SHA_TAG} not found in GHCR — build was skipped, nothing to promote"
             echo "::endgroup::"
             exit 0
           fi
 
-          # Tag sha-{7}
-          docker tag "${LOCAL_TAG}" "${SHA_TAG}"
+          TAG_ARGS="-t ${GHCR_BASE}/${IMG_NAME}:latest"
 
-          # Extract version tags from Dockerfile ARG pins (if any)
           DOCKERFILE="${{ matrix.dir }}/Dockerfile"
-          VERSION_TAGS=""
           if [[ -f "$DOCKERFILE" ]]; then
             while IFS='=' read -r arg_line value; do
               arg_name="${arg_line#ARG }"
               arg_name="${arg_name%% }"
-              if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                 prefix="$(echo "${arg_name%_VERSION}" | tr '[:upper:]' '[:lower:]')"
                 if [[ -n "$prefix" && "$prefix" != "$arg_name" ]]; then
-                  vt="${GHCR_BASE}/${{ matrix.name }}:${prefix}-${value}"
-                  docker tag "${LOCAL_TAG}" "${vt}"
-                  VERSION_TAGS="${VERSION_TAGS} ${vt}"
+                  TAG_ARGS="${TAG_ARGS} -t ${GHCR_BASE}/${IMG_NAME}:${prefix}-${value}"
                 fi
               fi
             done < <(grep -E '^ARG [A-Z_]+=[0-9]+\.[0-9]+\.[0-9]+' "$DOCKERFILE" 2>/dev/null || true)
           fi
 
-          # Push all tags
-          echo "Pushing ${LOCAL_TAG} ..."
-          docker push "${LOCAL_TAG}" 2>&1 | tail -1
+          echo "Tagging ${SHA_TAG} with: ${TAG_ARGS}"
+          docker buildx imagetools create ${TAG_ARGS} "${SHA_TAG}"
 
-          echo "Pushing ${SHA_TAG} ..."
-          docker push "${SHA_TAG}" 2>&1 | tail -1
-
-          for vt in $VERSION_TAGS; do
-            echo "Pushing ${vt} ..."
-            docker push "${vt}" 2>&1 | tail -1
-          done
-
-          echo "✅ ${{ matrix.name }} — all tags pushed to GHCR"
+          echo "✅ ${IMG_NAME} — promoted to latest and version tags"
           echo "::endgroup::"
 
   # ── Job: Notify Dokploy Compose webhook (non-fatal on failure) ──────────
-  # Only runs after images are successfully pushed to GHCR.
+  # Only runs after images are successfully promoted to GHCR.
   notify-dokploy:
     name: Notify Dokploy
-    runs-on: self-hosted
-    needs: push-images
+    runs-on: ubuntu-latest
+    needs: promote-images
     if: success()
     continue-on-error: true
 

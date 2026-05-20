@@ -1,22 +1,33 @@
 # .github/actions/docker-build-push/action.yml
 # Self-Hosted Workspace — Docker Build & Push Composite Action
 # ============================================================
-# Builds ARM64 Docker images with BuildKit cache (mode=max), logs into GHCR,
-# and pushes with latest, sha-<short>, and ARG version tags.
+# Cross-platform ARM64 build via QEMU + buildx. Logs into GHCR, builds with
+# BuildKit cache (mode=max), and pushes the resulting image.
 #
-# Usage:
-#   - name: Build and push
-#     uses: ./.github/actions/docker-build-push
-#     with:
-#       dockerfile_path: opencode/Dockerfile
-#       image_name: opencode-server
-#       build_context: ./opencode
+# Tag strategy (all controlled via inputs):
+#   sha-<short>  — always included (immutable, used for validation)
+#   latest       — included when include-latest-tag is true
+#   <prefix>-<v> — included when include-version-tags is true (from Dockerfile ARGs)
 #
-# The action auto-detects ARG version pins (e.g., ARG OPENCODE_VERSION=1.15.1)
-# and adds additional tags like `opencode-1.15.1` when found.
+# Usage (push only sha tag, for CI build → validate → promote flow):
+#   uses: ./.github/actions/docker-build-push
+#   with:
+#     dockerfile_path: opencode/Dockerfile
+#     image_name: opencode-server
+#     build_context: ./opencode
+#     push: true
+#     include-latest-tag: false
+#     include-version-tags: false
+#
+# Usage (full tags, for local/dev use):
+#   uses: ./.github/actions/docker-build-push
+#   with:
+#     dockerfile_path: opencode/Dockerfile
+#     image_name: opencode-server
+#     build_context: ./opencode
 
 name: 'Docker Build and Push'
-description: 'Build ARM64 Docker image and push to GHCR with version tags'
+description: 'Cross-platform Docker build (QEMU + buildx) and push to GHCR'
 
 inputs:
   dockerfile_path:
@@ -36,14 +47,38 @@ inputs:
     description: 'Push image to GHCR after build'
     required: false
     default: 'true'
+  load:
+    description: 'Load image into local Docker daemon (incompatible with push)'
+    required: false
+    default: 'false'
   no-cache:
     description: 'Skip BuildKit cache and rebuild from scratch'
     required: false
     default: 'false'
+  include-latest-tag:
+    description: 'Include latest tag (default: true)'
+    required: false
+    default: 'true'
+  include-version-tags:
+    description: 'Include version tags from Dockerfile ARGs (default: true)'
+    required: false
+    default: 'true'
+  setup-qemu:
+    description: 'Set up QEMU for cross-platform emulation (default: true)'
+    required: false
+    default: 'true'
+  build-contexts:
+    description: 'Additional BuildKit build contexts (newline-separated)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
   steps:
+    - name: Set up QEMU for cross-platform emulation
+      if: ${{ inputs.setup-qemu == 'true' }}
+      uses: docker/setup-qemu-action@v3
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -54,28 +89,26 @@ runs:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract version tags from Dockerfile ARGs
+    - name: Extract image tags
       id: version_tags
       shell: bash
       run: |
-        TAGS=""
         DOCKERFILE="${{ inputs.dockerfile_path }}"
+        GHCR_OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+        GHCR_BASE="ghcr.io/${GHCR_OWNER}"
 
-        # Always add latest and sha-<short> tags
-        GHCR_BASE="ghcr.io/${{ github.repository_owner }}"
-        TAGS="${GHCR_BASE}/${{ inputs.image_name }}:latest"
-        TAGS="${TAGS},${GHCR_BASE}/${{ inputs.image_name }}:sha-${GITHUB_SHA::7}"
+        # Always include the immutable sha-<short> tag
+        TAGS="${GHCR_BASE}/${{ inputs.image_name }}:sha-${GITHUB_SHA::7}"
 
-        # Parse ARG lines that contain version pins (e.g., ARG OPENCODE_VERSION=1.15.1)
-        # Format: ARG <PREFIX>_VERSION=<semver>
-        if [[ -f "$DOCKERFILE" ]]; then
+        if [[ "${{ inputs.include-latest-tag }}" == "true" ]]; then
+          TAGS="${TAGS},${GHCR_BASE}/${{ inputs.image_name }}:latest"
+        fi
+
+        if [[ "${{ inputs.include-version-tags }}" == "true" && -f "$DOCKERFILE" ]]; then
           while IFS='=' read -r arg_line value; do
-            # Extract ARG name after 'ARG '
             arg_name="${arg_line#ARG }"
             arg_name="${arg_name%% }"
-            # Check value looks like a version number
-            if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-              # Convert name (e.g., OPENCODE_VERSION -> opencode)
+            if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               prefix="$(echo "${arg_name%_VERSION}" | tr '[:upper:]' '[:lower:]')"
               if [[ -n "$prefix" && "$prefix" != "$arg_name" ]]; then
                 TAGS="${TAGS},${GHCR_BASE}/${{ inputs.image_name }}:${prefix}-${value}"
@@ -108,7 +141,8 @@ runs:
         platforms: ${{ inputs.target_platform }}
         tags: ${{ steps.version_tags.outputs.tags }}
         push: ${{ inputs.push }}
-        load: true
+        load: ${{ inputs.load }}
+        build-contexts: ${{ inputs.build-contexts }}
         provenance: false
         cache-from: ${{ steps.cache.outputs.cache-from }}
         cache-to: ${{ steps.cache.outputs.cache-to }}

@@ -1,6 +1,6 @@
 # CI/CD — Self-Hosted Workspace
 
-This document describes the CI/CD pipeline for the Self-Hosted Workspace project: how images are built, where they're pushed, how Renovate tracks dependencies, and what's needed to set up a self-hosted runner.
+This document describes the CI/CD pipeline for the Self-Hosted Workspace project: how images are built, where they're promoted, how Renovate tracks dependencies, and the GitHub Actions workflow architecture.
 
 ---
 
@@ -12,27 +12,14 @@ This document describes the CI/CD pipeline for the Self-Hosted Workspace project
 | PR validation | `.github/workflows/pr-validation.yml` |
 | Renovate config | `.github/renovate.json` |
 | Composite action | `.github/actions/docker-build-push/action.yml` |
-| Runner setup script | `scripts/setup-runner.sh` |
 
 ---
 
-## Self-hosted runner setup
+## Runner architecture
 
-All image builds run on a self-hosted ARM64 runner (Oracle Cloud A1 Flex VPS) for native ARM64 performance. Set it up with:
+Image builds use **GitHub-hosted `ubuntu-latest` runners** with QEMU emulation + Docker Buildx for cross-platform ARM64 builds. No self-hosted runners required.
 
-```bash
-# On the VPS (as root):
-export GITHUB_PAT="ghp_..."
-sudo ./scripts/setup-runner.sh
-```
-
-The script:
-- Downloads the GitHub Actions runner binary for `arm64`
-- Creates a `gh-runner` system user
-- Registers the runner with the repository
-- Installs a `systemd` service with auto-restart on boot
-
-**Labels assigned**: `arm64`, `self-hosted`, `dev-workspace`
+Previously this project used a self-hosted ARM64 VPS runner (Oracle Cloud A1 Flex). The setup script (`scripts/setup-runner.sh`) is retained for reference but is no longer used in CI.
 
 ---
 
@@ -54,15 +41,17 @@ These secrets must be configured in the repository's **Settings → Secrets and 
 ### build-images.yml
 
 The main CI pipeline triggered on:
-- **Push to `main`**: builds changed images (path-filtered), validates, pushes to GHCR
-- **Pull request**: builds affected images (path-filtered), validates, skips push
+- **Push to `main`**: builds changed images (path-filtered), validates, promotes to GHCR
+- **Pull request**: builds affected images (path-filtered), validates, skips promotion
 - **Workflow dispatch**: manual rebuild with optional `no-cache` flag
 - **Schedule**: weekly (Monday 03:00 UTC), rebuilds all images from scratch (no-cache)
 
-**Architecture**: Images are NEVER pushed before validation. Build jobs use
-`load: true` only (no push). A separate `push-images` job runs only after
-`validate` succeeds on the `main` branch. This prevents broken images from
-reaching production.
+**Architecture**: Registry handoff with three phases:
+1. **Build** → Cross-builds ARM64 images via QEMU + Buildx on `ubuntu-latest`, pushes only `sha-<short>` tags to GHCR.
+2. **Validate** → Pulls `sha-*` images from GHCR, verifies architecture (arm64/aarch64), runs runtime smoke checks.
+3. **Promote** → Uses `docker buildx imagetools create` to attach `latest` and version tags to validated `sha-*` images. No layer re-push.
+
+`latest` and version tags are NEVER published before validation passes.
 
 Job dependency graph:
 
@@ -70,7 +59,7 @@ Job dependency graph:
 changes (paths-filter)
   ├── build-dev-base ─┬─ build-opencode ─┐
   │                   ├─ build-codenomad ┤
-  ├── build-kasmvnc ──┘                   ├─ validate ── push-images ── notify-dokploy
+  ├── build-kasmvnc ──┘                   ├─ validate ── promote-images ── notify-dokploy
   └─ (build-all flag)                     ┘
 ```
 
@@ -85,7 +74,7 @@ Tagging strategy per image:
 - **opencode-server**: additionally `opencode-{OPENCODE_VERSION}`
 - **codenomad-server**: additionally `codenomad-{CODENOMAD_VERSION}`
 
-Tags are applied during the `push-images` job, which reuses the Dockerfile
+Tags are applied during the `promote-images` job, which reuses the Dockerfile
 ARG extraction logic from the composite action to generate version tags.
 
 ### pr-validation.yml
@@ -148,7 +137,7 @@ Major and minor updates require manual review.
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Runner offline | VPS rebooted, container stopped | Check `systemctl status actions.runner.*` on VPS; runner has `restart: unless-stopped` |
+| QEMU build timeout | ARM64 emulation on x86_64 is slow | Expected — first build (kasmvnc especially) may take 20–40 min; subsequent builds use GHA cache |
 | Workflow fails on push | `GITHUB_TOKEN` lacks `packages` scope | Verify `permissions.packages: write` is set in the workflow file |
 | Webhook POST fails | `DOKPLOY_WEBHOOK_URL` missing or changed | Non-fatal — images remain in GHCR; deploy manually via Dokploy UI; verify webhook URL in Dokploy → Service → Webhook |
 | Cache miss, slow builds | `no-cache` was set, or GHA cache evicted | Next scheduled build will populate cache; cache uses `type=gha,mode=max` |
