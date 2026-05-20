@@ -18,7 +18,7 @@ FROM dev-base:latest
 # ── Phase 1: Install dependencies ──────────────────────────────────────────
 # CodeNomad needs the opencode CLI in PATH (npm global puts it in /usr/local/bin).
 # Both are pinned via ARG for version coupling (tested together before deploy).
-ARG OPENCODE_VERSION=1.15.1
+ARG OPENCODE_VERSION=1.15.5
 ARG CODENOMAD_VERSION=0.16.0
 
 # Switch to root for global package install (dev-base ends as USER workspace)
