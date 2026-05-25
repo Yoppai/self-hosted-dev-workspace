@@ -18,7 +18,7 @@ FROM dev-base:latest
 # ── Phase 1: Install opencode ──────────────────────────────────────────────
 # Global npm install pins the opencode server CLI.
 # ARG allows version pinning at build time (default: latest).
-ARG OPENCODE_VERSION=1.15.5
+ARG OPENCODE_VERSION=1.15.10
 
 # Switch to root for global package install (dev-base ends as USER workspace)
 USER root
