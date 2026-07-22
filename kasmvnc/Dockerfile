@@ -17,7 +17,7 @@
 ## Runtime dependencies
 #   - KASMVNC_PASSWORD (Dokploy env var — required)
 #   - workspace_projects, workspace_home, kasm_config volumes
-FROM kasmweb/core-ubuntu-jammy:1.18.0
+FROM kasmweb/core-ubuntu-jammy:1.19.0
 
 # ── Phase 0: Scrub upstream default passwords ────────────────────────────
 # The kasmweb base image bakes VNC_PW=vncpassword and
